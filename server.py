@@ -13,6 +13,8 @@ from anthropic import AsyncAnthropic
 from google import genai
 from google.genai import types
 
+from conversation_store import ConversationStore
+
 # Load environment variables
 load_dotenv()
 
@@ -20,6 +22,9 @@ load_dotenv()
 openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 google_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+
+# Initialize conversation store
+conversation_store = ConversationStore(max_conversations=100, max_turns_per_conversation=50)
 
 # Create MCP server
 app = Server("llm-mcp-server")
@@ -31,6 +36,65 @@ def build_system_prompt(system_prompt: Optional[str] = None) -> str:
     if system_prompt:
         return f"{base_context}\n\n{system_prompt}"
     return base_context
+
+
+def get_validated_context(
+    context_id: Optional[str], provider: str
+) -> tuple[list, Optional[str], Optional[str]]:
+    """Retrieve and validate conversation context.
+
+    Args:
+        context_id: Optional context ID to retrieve
+        provider: Expected provider name (e.g., "claude", "gemini")
+
+    Returns:
+        Tuple of (existing_context, validated_context_id, error_message)
+        - existing_context: List of messages (empty if no valid context)
+        - validated_context_id: The context_id if valid, None otherwise
+        - error_message: Error string if validation failed, None otherwise
+    """
+    if not context_id:
+        return [], None, None
+
+    # Validate provider prefix
+    expected_prefix = f"ctx_{provider}_"
+    if not context_id.startswith(expected_prefix):
+        error_msg = (
+            f"Error: Invalid context_id for {provider.title()}. "
+            f"Expected context_id starting with '{expected_prefix}', got '{context_id}'. "
+            f"This context_id appears to be for a different provider."
+        )
+        return [], None, error_msg
+
+    # Try to retrieve context
+    existing_context = conversation_store.get_context(context_id)
+    if existing_context is None:
+        # Context ID not found in store, start fresh
+        return [], None, None
+
+    return existing_context, context_id, None
+
+
+def save_or_update_context(
+    context_id: Optional[str], new_messages: list, provider: str
+) -> str:
+    """Save new conversation or update existing one.
+
+    Args:
+        context_id: Existing context ID to update, or None for new conversation
+        new_messages: New messages to add to the conversation
+        provider: Provider name for creating new context IDs
+
+    Returns:
+        The context_id (either existing or newly created)
+    """
+    if context_id:
+        # Update existing conversation
+        conversation_store.update_context(context_id, new_messages)
+        return context_id
+    else:
+        # Save new conversation
+        return conversation_store.save_context(new_messages, provider=provider)
 
 
 @app.list_tools()
@@ -75,7 +139,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="query_claude",
-            description="Send a message to Claude and get a response. Returns conversation context that can be used to continue the conversation in follow-up calls.",
+            description="Send a message to Claude and get a response. Returns a Context ID that can be used to continue the conversation in follow-up calls.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -102,12 +166,9 @@ async def list_tools() -> list[Tool]:
                         "description": "Maximum tokens in response (default: 4096)",
                         "default": 4096,
                     },
-                    "context": {
-                        "type": "array",
-                        "description": "Optional conversation history (array of message objects with 'role' and 'content'). Use the context returned in a previous call to maintain conversation history.",
-                        "items": {
-                            "type": "object"
-                        }
+                    "context_id": {
+                        "type": "string",
+                        "description": "Optional ID from a previous response to continue that conversation. Use the Context ID returned in a previous call (found in the output after '[Context ID: ...]') to maintain conversation history.",
                     },
                 },
                 "required": ["message"],
@@ -115,7 +176,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="query_gemini",
-            description="Send a message to Gemini and get a response. Returns conversation context that can be used to continue the conversation in follow-up calls.",
+            description="Send a message to Gemini and get a response. Returns a Context ID that can be used to continue the conversation in follow-up calls.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -140,12 +201,9 @@ async def list_tools() -> list[Tool]:
                         "type": "number",
                         "description": "Maximum tokens in response (uses model default if not specified)",
                     },
-                    "context": {
-                        "type": "array",
-                        "description": "Optional conversation history (array of content objects with 'role' and 'parts'). Use the context returned in a previous call to maintain conversation history.",
-                        "items": {
-                            "type": "object"
-                        }
+                    "context_id": {
+                        "type": "string",
+                        "description": "Optional ID from a previous response to continue that conversation. Use the Context ID returned in a previous call (found in the output after '[Context ID: ...]') to maintain conversation history.",
                     },
                 },
                 "required": ["message"],
@@ -173,7 +231,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             system_prompt=arguments.get("system_prompt"),
             temperature=arguments.get("temperature", 1.0),
             max_tokens=arguments.get("max_tokens", 4096),
-            context=arguments.get("context"),
+            context_id=arguments.get("context_id"),
         )
     elif name == "query_gemini":
         return await query_gemini(
@@ -182,7 +240,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             system_prompt=arguments.get("system_prompt"),
             temperature=arguments.get("temperature"),
             max_tokens=arguments.get("max_tokens"),
-            context=arguments.get("context"),
+            context_id=arguments.get("context_id"),
         )
     else:
         raise ValueError(f"Unknown tool: {name}")
@@ -236,41 +294,44 @@ async def query_claude(
     system_prompt: Optional[str] = None,
     temperature: float = 1.0,
     max_tokens: int = 4096,
-    context: Optional[list] = None,
+    context_id: Optional[str] = None,
 ) -> list[TextContent]:
-    """Query Claude using stateful conversations with message history."""
-    import json
-
+    """Query Claude using stateful conversations with context IDs."""
     # Build system prompt with AI-to-AI context
     system_prompt = build_system_prompt(system_prompt)
 
-    # Initialize or use existing context
-    if context is None:
-        context = []
+    # Retrieve and validate existing context
+    existing_context, context_id, error_msg = get_validated_context(context_id, "claude")
+    if error_msg:
+        return [TextContent(type="text", text=error_msg)]
 
-    # Add the new user message to context
-    context.append({"role": "user", "content": message})
+    # Build messages for API call
+    messages = existing_context + [{"role": "user", "content": message}]
 
     kwargs = {
         "model": model,
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "messages": context,
+        "messages": messages,
         "system": system_prompt,
     }
 
     response = await anthropic_client.messages.create(**kwargs)
-
     content = response.content[0].text
 
-    # Add assistant's response to context
-    context.append({"role": "assistant", "content": content})
+    # Prepare new messages to add to conversation
+    new_messages = [
+        {"role": "user", "content": message},
+        {"role": "assistant", "content": content}
+    ]
+
+    # Save or update context in store
+    context_id = save_or_update_context(context_id, new_messages, "claude")
 
     usage_info = f"\n\n[Usage: {response.usage.input_tokens + response.usage.output_tokens} tokens ({response.usage.input_tokens} input, {response.usage.output_tokens} output)]"
 
-    # Return both content and updated context
-    context_json = json.dumps(context)
-    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Context: {context_json}]")]
+    # Return content with context ID
+    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Context ID: {context_id}]")]
 
 
 async def query_gemini(
@@ -279,21 +340,20 @@ async def query_gemini(
     system_prompt: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
-    context: Optional[list] = None,
+    context_id: Optional[str] = None,
 ) -> list[TextContent]:
-    """Query Gemini using stateful conversations with message history."""
-    import json
-
+    """Query Gemini using stateful conversations with context IDs."""
     # Build system prompt with AI-to-AI context
     system_prompt = build_system_prompt(system_prompt)
 
-    # Initialize or use existing context
-    if context is None:
-        context = []
+    # Retrieve and validate existing context
+    existing_context, context_id, error_msg = get_validated_context(context_id, "gemini")
+    if error_msg:
+        return [TextContent(type="text", text=error_msg)]
 
-    # Add the new user message to context
+    # Build contents for API call
     # Gemini Content format: {"role": "user", "parts": [{"text": "..."}]}
-    context.append({"role": "user", "parts": [{"text": message}]})
+    contents = existing_context + [{"role": "user", "parts": [{"text": message}]}]
 
     # Build GenerateContentConfig - only include params if explicitly provided
     config_params = {"system_instruction": system_prompt}
@@ -307,16 +367,22 @@ async def query_gemini(
     # Call Gemini API
     response = google_client.models.generate_content(
         model=model,
-        contents=context,
+        contents=contents,
         config=config,
     )
 
     # Extract text from response
     content = response.text
 
-    # Add model's response to context
+    # Prepare new messages to add to conversation
     # Gemini uses "model" role for assistant responses
-    context.append({"role": "model", "parts": [{"text": content}]})
+    new_messages = [
+        {"role": "user", "parts": [{"text": message}]},
+        {"role": "model", "parts": [{"text": content}]}
+    ]
+
+    # Save or update context in store
+    context_id = save_or_update_context(context_id, new_messages, "gemini")
 
     # Format usage info
     usage_info = ""
@@ -326,9 +392,8 @@ async def query_gemini(
         completion = response.usage_metadata.candidates_token_count
         usage_info = f"\n\n[Usage: {total} tokens ({prompt} input, {completion} output)]"
 
-    # Return both content and updated context
-    context_json = json.dumps(context)
-    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Context: {context_json}]")]
+    # Return content with context ID
+    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Context ID: {context_id}]")]
 
 
 async def main():

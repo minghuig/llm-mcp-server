@@ -74,7 +74,7 @@ Example workflow:
 2. Follow-up: `query_chatgpt("How are you?", previous_response_id="resp_abc123")`
 
 ### query_claude
-Send a message to Claude (Anthropic). Supports multi-turn conversations using client-side context management.
+Send a message to Claude (Anthropic). Supports multi-turn conversations using server-side context management.
 
 Parameters:
 - `message` (required): The message to send
@@ -82,17 +82,19 @@ Parameters:
 - `system_prompt` (optional): System prompt for context
 - `temperature` (optional): 0.0 to 1.0 (default: 1.0)
 - `max_tokens` (optional): Maximum response length (default: 4096)
-- `context` (optional): Conversation history array from a previous call to continue the conversation
+- `context_id` (optional): Context ID from a previous call to continue the conversation
 
 **Multi-turn conversations:**
-The tool returns conversation context as JSON in the output. Pass this context array to subsequent calls to continue the conversation. You manage the conversation history.
+The tool returns a Context ID in the output (format: `ctx_claude_...`). Pass this ID to `context_id` in subsequent calls to continue the conversation. The server stores conversation history in memory with automatic limits to prevent memory issues.
+
+Context IDs are provider-specific and cannot be used across different providers (e.g., a Claude context_id cannot be used with Gemini).
 
 Example workflow:
-1. First call: `query_claude("Hello!")` → Returns `[Context: [{"role": "user", "content": "Hello!"}, ...]]`
-2. Follow-up: `query_claude("How are you?", context=[...])` with the context from step 1
+1. First call: `query_claude("Hello!")` → Returns `[Context ID: ctx_claude_abc123def456]`
+2. Follow-up: `query_claude("How are you?", context_id="ctx_claude_abc123def456")`
 
 ### query_gemini
-Send a message to Gemini (Google). Supports multi-turn conversations using client-side context management.
+Send a message to Gemini (Google). Supports multi-turn conversations using server-side context management.
 
 Parameters:
 - `message` (required): The message to send
@@ -100,11 +102,13 @@ Parameters:
 - `system_prompt` (optional): System prompt for context
 - `temperature` (optional): 0.0 to 2.0 (uses model default if not specified)
 - `max_tokens` (optional): Maximum response length (uses model default if not specified)
-- `context` (optional): Conversation history array from a previous call to continue the conversation
+- `context_id` (optional): Context ID from a previous call to continue the conversation
 
 **Multi-turn conversations:**
-The tool returns conversation context as JSON in the output. Pass this context array to subsequent calls to continue the conversation. You manage the conversation history.
+The tool returns a Context ID in the output (format: `ctx_gemini_...`). Pass this ID to `context_id` in subsequent calls to continue the conversation. The server stores conversation history in memory with automatic limits to prevent memory issues.
+
+Context IDs are provider-specific and cannot be used across different providers (e.g., a Gemini context_id cannot be used with Claude).
 
 Example workflow:
-1. First call: `query_gemini("Hello!")` → Returns `[Context: [{"role": "user", "parts": [{"text": "Hello!"}]}, ...]]`
-2. Follow-up: `query_gemini("How are you?", context=[...])` with the context from step 1
+1. First call: `query_gemini("Hello!")` → Returns `[Context ID: ctx_gemini_abc123def456]`
+2. Follow-up: `query_gemini("How are you?", context_id="ctx_gemini_abc123def456")`
