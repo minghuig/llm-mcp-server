@@ -28,7 +28,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="query_chatgpt",
-            description="Send a message to ChatGPT and get a response",
+            description="Send a message to ChatGPT and get a response. Returns a Response ID that can be used to continue the conversation in follow-up calls.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -54,13 +54,17 @@ async def list_tools() -> list[Tool]:
                         "type": "number",
                         "description": "Maximum tokens in response",
                     },
+                    "previous_response_id": {
+                        "type": "string",
+                        "description": "Optional ID from a previous response to continue that conversation. Use the Response ID returned in a previous call to maintain conversation history.",
+                    },
                 },
                 "required": ["message"],
             },
         ),
         Tool(
             name="query_claude",
-            description="Send a message to Claude and get a response",
+            description="Send a message to Claude and get a response. Returns conversation context that can be used to continue the conversation in follow-up calls.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -87,6 +91,13 @@ async def list_tools() -> list[Tool]:
                         "description": "Maximum tokens in response (default: 4096)",
                         "default": 4096,
                     },
+                    "context": {
+                        "type": "array",
+                        "description": "Optional conversation history (array of message objects with 'role' and 'content'). Use the context returned in a previous call to maintain conversation history.",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
                 },
                 "required": ["message"],
             },
@@ -104,6 +115,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             system_prompt=arguments.get("system_prompt"),
             temperature=arguments.get("temperature", 0.7),
             max_tokens=arguments.get("max_tokens"),
+            previous_response_id=arguments.get("previous_response_id"),
         )
     elif name == "query_claude":
         return await query_claude(
@@ -112,6 +124,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             system_prompt=arguments.get("system_prompt"),
             temperature=arguments.get("temperature", 1.0),
             max_tokens=arguments.get("max_tokens", 4096),
+            context=arguments.get("context"),
         )
     else:
         raise ValueError(f"Unknown tool: {name}")
@@ -123,35 +136,44 @@ async def query_chatgpt(
     system_prompt: Optional[str] = None,
     temperature: float = 0.7,
     max_tokens: Optional[int] = None,
+    previous_response_id: Optional[str] = None,
 ) -> list[TextContent]:
-    """Query ChatGPT."""
+    """Query ChatGPT using Responses API for stateful conversations."""
+
     # Build system prompt with AI-to-AI context
     base_context = "You are conversing with another AI assistant (Claude)."
     if system_prompt:
-        final_system_prompt = f"{base_context}\n\n{system_prompt}"
+        instructions = f"{base_context}\n\n{system_prompt}"
     else:
-        final_system_prompt = base_context
+        instructions = base_context
 
-    messages = []
-    messages.append({"role": "system", "content": final_system_prompt})
-    messages.append({"role": "user", "content": message})
-
+    # Build kwargs for responses.create()
     kwargs = {
         "model": model,
-        "messages": messages,
+        "instructions": instructions,
+        "input": message,
         "temperature": temperature,
+        "store": True,  # Store conversation for continuation
     }
+
     if max_tokens:
         kwargs["max_tokens"] = max_tokens
 
-    response = await openai_client.chat.completions.create(**kwargs)
+    # If continuing a conversation, pass previous_response_id
+    if previous_response_id:
+        kwargs["previous_response_id"] = previous_response_id
 
-    content = response.choices[0].message.content or ""
-    usage_info = ""
-    if response.usage:
-        usage_info = f"\n\n[Usage: {response.usage.total_tokens} tokens ({response.usage.prompt_tokens} prompt, {response.usage.completion_tokens} completion)]"
+    # Call the Responses API
+    response = await openai_client.responses.create(**kwargs)
 
-    return [TextContent(type="text", text=f"{content}{usage_info}")]
+    # Get the text content to display
+    content = response.output_text
+
+    # Format usage info
+    usage_info = f"\n\n[Usage: {response.usage.total_tokens} tokens ({response.usage.input_tokens} input, {response.usage.output_tokens} output)]"
+
+    # Return content with response ID for continuation
+    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Response ID: {response.id}]")]
 
 
 async def query_claude(
@@ -160,8 +182,11 @@ async def query_claude(
     system_prompt: Optional[str] = None,
     temperature: float = 1.0,
     max_tokens: int = 4096,
+    context: Optional[list] = None,
 ) -> list[TextContent]:
-    """Query Claude."""
+    """Query Claude using stateful conversations with message history."""
+    import json
+
     # Build system prompt with AI-to-AI context
     base_context = "You are conversing with another AI assistant (Claude)."
     if system_prompt:
@@ -169,20 +194,33 @@ async def query_claude(
     else:
         final_system_prompt = base_context
 
+    # Initialize or use existing context
+    if context is None:
+        context = []
+
+    # Add the new user message to context
+    context.append({"role": "user", "content": message})
+
     kwargs = {
         "model": model,
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "messages": [{"role": "user", "content": message}],
+        "messages": context,
         "system": final_system_prompt,
     }
 
     response = await anthropic_client.messages.create(**kwargs)
 
     content = response.content[0].text
+
+    # Add assistant's response to context
+    context.append({"role": "assistant", "content": content})
+
     usage_info = f"\n\n[Usage: {response.usage.input_tokens + response.usage.output_tokens} tokens ({response.usage.input_tokens} input, {response.usage.output_tokens} output)]"
 
-    return [TextContent(type="text", text=f"{content}{usage_info}")]
+    # Return both content and updated context
+    context_json = json.dumps(context)
+    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Context: {context_json}]")]
 
 
 async def main():

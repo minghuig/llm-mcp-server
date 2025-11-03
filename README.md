@@ -4,8 +4,9 @@ A simple MCP (Model Context Protocol) server that provides tools to query Claude
 
 ## Features
 
-- `query_claude`: Send messages to Claude (Anthropic API)
-- `query_chatgpt`: Send messages to ChatGPT (OpenAI API)
+- `query_claude`: Send messages to Claude (Anthropic API) with multi-turn conversation support
+- `query_chatgpt`: Send messages to ChatGPT (OpenAI API) with multi-turn conversation support
+- AI-to-AI conversation context automatically included in system prompts
 
 ## Setup
 
@@ -54,7 +55,7 @@ The server will automatically load API keys from the `.env` file. Alternatively,
 ## Available Tools
 
 ### query_chatgpt
-Send a message to ChatGPT (OpenAI).
+Send a message to ChatGPT (OpenAI). Supports multi-turn conversations using server-side storage.
 
 Parameters:
 - `message` (required): The message to send
@@ -62,9 +63,17 @@ Parameters:
 - `system_prompt` (optional): System prompt for context
 - `temperature` (optional): 0.0 to 2.0 (default: 0.7)
 - `max_tokens` (optional): Maximum response length
+- `previous_response_id` (optional): Response ID from a previous call to continue the conversation
+
+**Multi-turn conversations:**
+The tool returns a Response ID in the output. Pass this ID to `previous_response_id` in subsequent calls to continue the conversation. OpenAI stores the conversation history server-side.
+
+Example workflow:
+1. First call: `query_chatgpt("Hello!")` → Returns `[Response ID: resp_abc123]`
+2. Follow-up: `query_chatgpt("How are you?", previous_response_id="resp_abc123")`
 
 ### query_claude
-Send a message to Claude (Anthropic).
+Send a message to Claude (Anthropic). Supports multi-turn conversations using client-side context management.
 
 Parameters:
 - `message` (required): The message to send
@@ -72,3 +81,11 @@ Parameters:
 - `system_prompt` (optional): System prompt for context
 - `temperature` (optional): 0.0 to 1.0 (default: 1.0)
 - `max_tokens` (optional): Maximum response length (default: 4096)
+- `context` (optional): Conversation history array from a previous call to continue the conversation
+
+**Multi-turn conversations:**
+The tool returns conversation context as JSON in the output. Pass this context array to subsequent calls to continue the conversation. You manage the conversation history.
+
+Example workflow:
+1. First call: `query_claude("Hello!")` → Returns `[Context: [{"role": "user", "content": "Hello!"}, ...]]`
+2. Follow-up: `query_claude("How are you?", context=[...])` with the context from step 1
