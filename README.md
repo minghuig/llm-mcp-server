@@ -62,7 +62,7 @@ Parameters:
 - `message` (required): The message to send
 - `model` (optional): Model to use (default: "gpt-4.1-2025-04-14")
 - `system_prompt` (optional): System prompt for context
-- `temperature` (optional): 0.0 to 2.0 (default: 0.7)
+- `temperature` (optional): 0.0 to 2.0 (uses model default if not specified)
 - `max_tokens` (optional): Maximum response length
 - `previous_response_id` (optional): Response ID from a previous call to continue the conversation
 
@@ -80,7 +80,7 @@ Parameters:
 - `message` (required): The message to send
 - `model` (optional): Model to use (default: "claude-sonnet-4-5-20250929")
 - `system_prompt` (optional): System prompt for context
-- `temperature` (optional): 0.0 to 1.0 (default: 1.0)
+- `temperature` (optional): 0.0 to 1.0 (uses model default if not specified)
 - `max_tokens` (optional): Maximum response length (default: 4096)
 - `context_id` (optional): Context ID from a previous call to continue the conversation
 

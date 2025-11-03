@@ -122,8 +122,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "temperature": {
                         "type": "number",
-                        "description": "Sampling temperature 0.0-2.0 (default: 0.7)",
-                        "default": 0.7,
+                        "description": "Sampling temperature 0.0-2.0 (uses model default if not specified)",
                     },
                     "max_tokens": {
                         "type": "number",
@@ -158,8 +157,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "temperature": {
                         "type": "number",
-                        "description": "Sampling temperature 0.0-1.0 (default: 1.0)",
-                        "default": 1.0,
+                        "description": "Sampling temperature 0.0-1.0 (uses model default if not specified)",
                     },
                     "max_tokens": {
                         "type": "number",
@@ -220,7 +218,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             message=arguments["message"],
             model=arguments.get("model", "gpt-4.1-2025-04-14"),
             system_prompt=arguments.get("system_prompt"),
-            temperature=arguments.get("temperature", 0.7),
+            temperature=arguments.get("temperature"),
             max_tokens=arguments.get("max_tokens"),
             previous_response_id=arguments.get("previous_response_id"),
         )
@@ -229,7 +227,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             message=arguments["message"],
             model=arguments.get("model", "claude-sonnet-4-5-20250929"),
             system_prompt=arguments.get("system_prompt"),
-            temperature=arguments.get("temperature", 1.0),
+            temperature=arguments.get("temperature"),
             max_tokens=arguments.get("max_tokens", 4096),
             context_id=arguments.get("context_id"),
         )
@@ -250,7 +248,7 @@ async def query_chatgpt(
     message: str,
     model: str,
     system_prompt: Optional[str] = None,
-    temperature: float = 0.7,
+    temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
     previous_response_id: Optional[str] = None,
 ) -> list[TextContent]:
@@ -264,12 +262,14 @@ async def query_chatgpt(
         "model": model,
         "instructions": instructions,
         "input": message,
-        "temperature": temperature,
         "store": True,  # Store conversation for continuation
     }
 
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+
     if max_tokens:
-        kwargs["max_tokens"] = max_tokens
+        kwargs["max_output_tokens"] = max_tokens
 
     # If continuing a conversation, pass previous_response_id
     if previous_response_id:
@@ -292,7 +292,7 @@ async def query_claude(
     message: str,
     model: str,
     system_prompt: Optional[str] = None,
-    temperature: float = 1.0,
+    temperature: Optional[float] = None,
     max_tokens: int = 4096,
     context_id: Optional[str] = None,
 ) -> list[TextContent]:
@@ -311,10 +311,12 @@ async def query_claude(
     kwargs = {
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": temperature,
         "messages": messages,
         "system": system_prompt,
     }
+
+    if temperature is not None:
+        kwargs["temperature"] = temperature
 
     response = await anthropic_client.messages.create(**kwargs)
     content = response.content[0].text
