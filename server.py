@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MCP Server for querying Claude and ChatGPT."""
+"""MCP Server for querying Claude, ChatGPT, and Gemini."""
 
 import os
 import asyncio
@@ -10,6 +10,8 @@ from mcp.server import Server
 from mcp.types import Tool, TextContent
 from openai import AsyncOpenAI
 from anthropic import AsyncAnthropic
+from google import genai
+from google.genai import types
 
 # Load environment variables
 load_dotenv()
@@ -17,9 +19,18 @@ load_dotenv()
 # Initialize API clients
 openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+google_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
 # Create MCP server
 app = Server("llm-mcp-server")
+
+
+def build_system_prompt(system_prompt: Optional[str] = None) -> str:
+    """Build system prompt with AI-to-AI context."""
+    base_context = "You are conversing with another AI assistant (Claude)."
+    if system_prompt:
+        return f"{base_context}\n\n{system_prompt}"
+    return base_context
 
 
 @app.list_tools()
@@ -102,6 +113,44 @@ async def list_tools() -> list[Tool]:
                 "required": ["message"],
             },
         ),
+        Tool(
+            name="query_gemini",
+            description="Send a message to Gemini and get a response. Returns conversation context that can be used to continue the conversation in follow-up calls.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The message to send to Gemini",
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Model to use (default: gemini-2.5-flash)",
+                        "default": "gemini-2.5-flash",
+                    },
+                    "system_prompt": {
+                        "type": "string",
+                        "description": "Optional system prompt for context",
+                    },
+                    "temperature": {
+                        "type": "number",
+                        "description": "Sampling temperature 0.0-2.0 (uses model default if not specified)",
+                    },
+                    "max_tokens": {
+                        "type": "number",
+                        "description": "Maximum tokens in response (uses model default if not specified)",
+                    },
+                    "context": {
+                        "type": "array",
+                        "description": "Optional conversation history (array of content objects with 'role' and 'parts'). Use the context returned in a previous call to maintain conversation history.",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                },
+                "required": ["message"],
+            },
+        ),
     ]
 
 
@@ -126,6 +175,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             max_tokens=arguments.get("max_tokens", 4096),
             context=arguments.get("context"),
         )
+    elif name == "query_gemini":
+        return await query_gemini(
+            message=arguments["message"],
+            model=arguments.get("model", "gemini-2.5-flash"),
+            system_prompt=arguments.get("system_prompt"),
+            temperature=arguments.get("temperature"),
+            max_tokens=arguments.get("max_tokens"),
+            context=arguments.get("context"),
+        )
     else:
         raise ValueError(f"Unknown tool: {name}")
 
@@ -141,11 +199,7 @@ async def query_chatgpt(
     """Query ChatGPT using Responses API for stateful conversations."""
 
     # Build system prompt with AI-to-AI context
-    base_context = "You are conversing with another AI assistant (Claude)."
-    if system_prompt:
-        instructions = f"{base_context}\n\n{system_prompt}"
-    else:
-        instructions = base_context
+    instructions = build_system_prompt(system_prompt)
 
     # Build kwargs for responses.create()
     kwargs = {
@@ -188,11 +242,7 @@ async def query_claude(
     import json
 
     # Build system prompt with AI-to-AI context
-    base_context = "You are conversing with another AI assistant (Claude)."
-    if system_prompt:
-        final_system_prompt = f"{base_context}\n\n{system_prompt}"
-    else:
-        final_system_prompt = base_context
+    system_prompt = build_system_prompt(system_prompt)
 
     # Initialize or use existing context
     if context is None:
@@ -206,7 +256,7 @@ async def query_claude(
         "max_tokens": max_tokens,
         "temperature": temperature,
         "messages": context,
-        "system": final_system_prompt,
+        "system": system_prompt,
     }
 
     response = await anthropic_client.messages.create(**kwargs)
@@ -217,6 +267,64 @@ async def query_claude(
     context.append({"role": "assistant", "content": content})
 
     usage_info = f"\n\n[Usage: {response.usage.input_tokens + response.usage.output_tokens} tokens ({response.usage.input_tokens} input, {response.usage.output_tokens} output)]"
+
+    # Return both content and updated context
+    context_json = json.dumps(context)
+    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Context: {context_json}]")]
+
+
+async def query_gemini(
+    message: str,
+    model: str,
+    system_prompt: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    context: Optional[list] = None,
+) -> list[TextContent]:
+    """Query Gemini using stateful conversations with message history."""
+    import json
+
+    # Build system prompt with AI-to-AI context
+    system_prompt = build_system_prompt(system_prompt)
+
+    # Initialize or use existing context
+    if context is None:
+        context = []
+
+    # Add the new user message to context
+    # Gemini Content format: {"role": "user", "parts": [{"text": "..."}]}
+    context.append({"role": "user", "parts": [{"text": message}]})
+
+    # Build GenerateContentConfig - only include params if explicitly provided
+    config_params = {"system_instruction": system_prompt}
+    if temperature is not None:
+        config_params["temperature"] = temperature
+    if max_tokens is not None:
+        config_params["max_output_tokens"] = max_tokens
+
+    config = types.GenerateContentConfig(**config_params)
+
+    # Call Gemini API
+    response = google_client.models.generate_content(
+        model=model,
+        contents=context,
+        config=config,
+    )
+
+    # Extract text from response
+    content = response.text
+
+    # Add model's response to context
+    # Gemini uses "model" role for assistant responses
+    context.append({"role": "model", "parts": [{"text": content}]})
+
+    # Format usage info
+    usage_info = ""
+    if response.usage_metadata:
+        total = response.usage_metadata.total_token_count
+        prompt = response.usage_metadata.prompt_token_count
+        completion = response.usage_metadata.candidates_token_count
+        usage_info = f"\n\n[Usage: {total} tokens ({prompt} input, {completion} output)]"
 
     # Return both content and updated context
     context_json = json.dumps(context)
