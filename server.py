@@ -24,7 +24,7 @@ anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 google_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
 # Initialize conversation store
-conversation_store = ConversationStore(max_conversations=100, max_turns_per_conversation=50)
+conversation_store = ConversationStore(max_conversations=50)
 
 # Create MCP server
 app = Server("llm-mcp-server")
@@ -32,7 +32,7 @@ app = Server("llm-mcp-server")
 
 def build_system_prompt(system_prompt: Optional[str] = None) -> str:
     """Build system prompt with AI-to-AI context."""
-    base_context = "You are conversing with another AI assistant (Claude)."
+    base_context = "You are conversing with another AI assistant through an MCP server."
     if system_prompt:
         return f"{base_context}\n\n{system_prompt}"
     return base_context

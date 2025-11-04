@@ -8,17 +8,13 @@ from typing import Optional
 class ConversationStore:
     """In-memory store for conversation contexts with size limits."""
 
-    def __init__(
-        self, max_conversations: int = 100, max_turns_per_conversation: int = 50
-    ):
+    def __init__(self, max_conversations: int = 50):
         """Initialize the conversation store.
 
         Args:
-            max_conversations: Maximum number of conversations to store
-            max_turns_per_conversation: Maximum number of turns per conversation
+            max_conversations: Maximum number of conversations to store (default: 50)
         """
         self.max_conversations = max_conversations
-        self.max_turns_per_conversation = max_turns_per_conversation
         self.conversations = OrderedDict()
 
     def save_context(self, context: list, provider: str) -> str:
@@ -32,10 +28,6 @@ class ConversationStore:
             context_id: Unique identifier for this conversation with provider prefix
         """
         context_id = f"ctx_{provider}_{uuid.uuid4().hex[:16]}"
-
-        # Enforce per-conversation turn limit
-        if len(context) > self.max_turns_per_conversation:
-            context = context[-self.max_turns_per_conversation :]
 
         # Evict oldest conversation if at capacity
         if len(self.conversations) >= self.max_conversations:
@@ -74,12 +66,6 @@ class ConversationStore:
 
         # Append new messages
         self.conversations[context_id].extend(new_messages)
-
-        # Enforce turn limit by truncating old messages
-        if len(self.conversations[context_id]) > self.max_turns_per_conversation:
-            self.conversations[context_id] = self.conversations[context_id][
-                -self.max_turns_per_conversation :
-            ]
 
         # Move to end (mark as recently used)
         self.conversations.move_to_end(context_id)
