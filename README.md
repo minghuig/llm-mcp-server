@@ -56,22 +56,27 @@ The server will automatically load API keys from the `.env` file. Alternatively,
 ## Available Tools
 
 ### query_chatgpt
-Send a message to ChatGPT (OpenAI). Supports multi-turn conversations using server-side storage.
+Send a message to ChatGPT (OpenAI). Supports multi-turn conversations using server-side context management.
 
 Parameters:
 - `message` (required): The message to send
 - `model` (optional): Model to use (default: "gpt-4.1-2025-04-14")
-- `system_prompt` (optional): System prompt for context
+- `system_prompt` (optional): System prompt for context (persists throughout conversation unless overridden)
 - `temperature` (optional): 0.0 to 2.0 (uses model default if not specified)
 - `max_tokens` (optional): Maximum response length
-- `previous_response_id` (optional): Response ID from a previous call to continue the conversation
+- `context_id` (optional): Context ID from a previous call to continue the conversation
 
 **Multi-turn conversations:**
-The tool returns a Response ID in the output. Pass this ID to `previous_response_id` in subsequent calls to continue the conversation. OpenAI stores the conversation history server-side.
+The tool returns a Context ID in the output (format: `ctx_chatgpt_...`). Pass this ID to `context_id` in subsequent calls to continue the conversation. The server stores conversation history in memory with automatic limits to prevent memory issues.
+
+Context IDs are provider-specific and cannot be used across different providers (e.g., a ChatGPT context_id cannot be used with Claude).
+
+**System prompt persistence:**
+When you provide a `system_prompt` in the first message of a conversation, it will be automatically reused for all subsequent messages in that conversation unless explicitly overridden.
 
 Example workflow:
-1. First call: `query_chatgpt("Hello!")` → Returns `[Response ID: resp_abc123]`
-2. Follow-up: `query_chatgpt("How are you?", previous_response_id="resp_abc123")`
+1. First call: `query_chatgpt("Hello!")` → Returns `[Context ID: ctx_chatgpt_abc123def456]`
+2. Follow-up: `query_chatgpt("How are you?", context_id="ctx_chatgpt_abc123def456")`
 
 ### query_claude
 Send a message to Claude (Anthropic). Supports multi-turn conversations using server-side context management.
@@ -79,7 +84,7 @@ Send a message to Claude (Anthropic). Supports multi-turn conversations using se
 Parameters:
 - `message` (required): The message to send
 - `model` (optional): Model to use (default: "claude-sonnet-4-5-20250929")
-- `system_prompt` (optional): System prompt for context
+- `system_prompt` (optional): System prompt for context (persists throughout conversation unless overridden)
 - `temperature` (optional): 0.0 to 1.0 (uses model default if not specified)
 - `max_tokens` (optional): Maximum response length (default: 4096)
 - `context_id` (optional): Context ID from a previous call to continue the conversation
@@ -88,6 +93,9 @@ Parameters:
 The tool returns a Context ID in the output (format: `ctx_claude_...`). Pass this ID to `context_id` in subsequent calls to continue the conversation. The server stores conversation history in memory with automatic limits to prevent memory issues.
 
 Context IDs are provider-specific and cannot be used across different providers (e.g., a Claude context_id cannot be used with Gemini).
+
+**System prompt persistence:**
+When you provide a `system_prompt` in the first message of a conversation, it will be automatically reused for all subsequent messages in that conversation unless explicitly overridden.
 
 Example workflow:
 1. First call: `query_claude("Hello!")` → Returns `[Context ID: ctx_claude_abc123def456]`
@@ -99,7 +107,7 @@ Send a message to Gemini (Google). Supports multi-turn conversations using serve
 Parameters:
 - `message` (required): The message to send
 - `model` (optional): Model to use (default: "gemini-2.5-flash")
-- `system_prompt` (optional): System prompt for context
+- `system_prompt` (optional): System prompt for context (persists throughout conversation unless overridden)
 - `temperature` (optional): 0.0 to 2.0 (uses model default if not specified)
 - `max_tokens` (optional): Maximum response length (uses model default if not specified)
 - `context_id` (optional): Context ID from a previous call to continue the conversation
@@ -108,6 +116,9 @@ Parameters:
 The tool returns a Context ID in the output (format: `ctx_gemini_...`). Pass this ID to `context_id` in subsequent calls to continue the conversation. The server stores conversation history in memory with automatic limits to prevent memory issues.
 
 Context IDs are provider-specific and cannot be used across different providers (e.g., a Gemini context_id cannot be used with Claude).
+
+**System prompt persistence:**
+When you provide a `system_prompt` in the first message of a conversation, it will be automatically reused for all subsequent messages in that conversation unless explicitly overridden.
 
 Example workflow:
 1. First call: `query_gemini("Hello!")` → Returns `[Context ID: ctx_gemini_abc123def456]`

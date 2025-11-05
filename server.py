@@ -40,21 +40,20 @@ def build_system_prompt(system_prompt: Optional[str] = None) -> str:
 
 def get_validated_context(
     context_id: Optional[str], provider: str
-) -> tuple[list, Optional[str], Optional[str]]:
+) -> tuple[Optional[dict], Optional[str]]:
     """Retrieve and validate conversation context.
 
     Args:
         context_id: Optional context ID to retrieve
-        provider: Expected provider name (e.g., "claude", "gemini")
+        provider: Expected provider name (e.g., "claude", "gemini", "chatgpt")
 
     Returns:
-        Tuple of (existing_context, validated_context_id, error_message)
-        - existing_context: List of messages (empty if no valid context)
-        - validated_context_id: The context_id if valid, None otherwise
+        Tuple of (context, error_message)
+        - context: Dict with 'conversations' and 'system_prompt' keys if exists, None otherwise
         - error_message: Error string if validation failed, None otherwise
     """
     if not context_id:
-        return [], None, None
+        return None, None
 
     # Validate provider prefix
     expected_prefix = f"ctx_{provider}_"
@@ -64,37 +63,10 @@ def get_validated_context(
             f"Expected context_id starting with '{expected_prefix}', got '{context_id}'. "
             f"This context_id appears to be for a different provider."
         )
-        return [], None, error_msg
+        return None, error_msg
 
-    # Try to retrieve context
-    existing_context = conversation_store.get_context(context_id)
-    if existing_context is None:
-        # Context ID not found in store, start fresh
-        return [], None, None
-
-    return existing_context, context_id, None
-
-
-def save_or_update_context(
-    context_id: Optional[str], new_messages: list, provider: str
-) -> str:
-    """Save new conversation or update existing one.
-
-    Args:
-        context_id: Existing context ID to update, or None for new conversation
-        new_messages: New messages to add to the conversation
-        provider: Provider name for creating new context IDs
-
-    Returns:
-        The context_id (either existing or newly created)
-    """
-    if context_id:
-        # Update existing conversation
-        conversation_store.update_context(context_id, new_messages)
-        return context_id
-    else:
-        # Save new conversation
-        return conversation_store.save_context(new_messages, provider=provider)
+    # Try to retrieve context    
+    return conversation_store.get_context(context_id), None
 
 
 @app.list_tools()
@@ -103,7 +75,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="query_chatgpt",
-            description="Send a message to ChatGPT and get a response. Returns a Response ID that can be used to continue the conversation in follow-up calls.",
+            description="Send a message to ChatGPT and get a response. Returns a Context ID that can be used to continue the conversation in follow-up calls.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -118,7 +90,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "system_prompt": {
                         "type": "string",
-                        "description": "Optional system prompt for context",
+                        "description": "Optional system prompt for context. Persists throughout the conversation unless explicitly overridden.",
                     },
                     "temperature": {
                         "type": "number",
@@ -128,9 +100,9 @@ async def list_tools() -> list[Tool]:
                         "type": "number",
                         "description": "Maximum tokens in response",
                     },
-                    "previous_response_id": {
+                    "context_id": {
                         "type": "string",
-                        "description": "Optional ID from a previous response to continue that conversation. Use the Response ID returned in a previous call to maintain conversation history.",
+                        "description": "Optional ID from a previous response to continue that conversation. Use the Context ID returned in a previous call (found in the output after '[Context ID: ...]') to maintain conversation history.",
                     },
                 },
                 "required": ["message"],
@@ -153,7 +125,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "system_prompt": {
                         "type": "string",
-                        "description": "Optional system prompt for context",
+                        "description": "Optional system prompt for context. Persists throughout the conversation unless explicitly overridden.",
                     },
                     "temperature": {
                         "type": "number",
@@ -189,7 +161,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "system_prompt": {
                         "type": "string",
-                        "description": "Optional system prompt for context",
+                        "description": "Optional system prompt for context. Persists throughout the conversation unless explicitly overridden.",
                     },
                     "temperature": {
                         "type": "number",
@@ -220,7 +192,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             system_prompt=arguments.get("system_prompt"),
             temperature=arguments.get("temperature"),
             max_tokens=arguments.get("max_tokens"),
-            previous_response_id=arguments.get("previous_response_id"),
+            context_id=arguments.get("context_id"),
         )
     elif name == "query_claude":
         return await query_claude(
@@ -250,19 +222,27 @@ async def query_chatgpt(
     system_prompt: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
-    previous_response_id: Optional[str] = None,
+    context_id: Optional[str] = None,
 ) -> list[TextContent]:
     """Query ChatGPT using Responses API for stateful conversations."""
 
-    # Build system prompt with AI-to-AI context
-    instructions = build_system_prompt(system_prompt)
+    # Retrieve and validate existing context
+    context, error_msg = get_validated_context(context_id, "chatgpt")
+    if error_msg:
+        return [TextContent(type="text", text=error_msg)]
+    
+    if context and not system_prompt:
+        system_prompt = context['system_prompt']
+    else:
+        system_prompt = build_system_prompt(system_prompt)
+
+    messages = (context['conversations'] if context else []) + [{"role": "user", "content": message}]
 
     # Build kwargs for responses.create()
     kwargs = {
         "model": model,
-        "instructions": instructions,
-        "input": message,
-        "store": True,  # Store conversation for continuation
+        "instructions": system_prompt,
+        "input": messages,
     }
 
     if temperature is not None:
@@ -271,21 +251,29 @@ async def query_chatgpt(
     if max_tokens:
         kwargs["max_output_tokens"] = max_tokens
 
-    # If continuing a conversation, pass previous_response_id
-    if previous_response_id:
-        kwargs["previous_response_id"] = previous_response_id
-
     # Call the Responses API
     response = await openai_client.responses.create(**kwargs)
 
     # Get the text content to display
     content = response.output_text
 
+    # Prepare new messages to add to conversation
+    new_messages = [
+        {"role": "user", "content": message},
+        {"role": "assistant", "content": content}
+    ]
+
+    # Save or update context in store
+    if context is None:
+        context_id = conversation_store.create_context(new_messages, "chatgpt", system_prompt)
+    else:
+        conversation_store.update_context(context_id, new_messages, system_prompt)
+
     # Format usage info
     usage_info = f"\n\n[Usage: {response.usage.total_tokens} tokens ({response.usage.input_tokens} input, {response.usage.output_tokens} output)]"
 
-    # Return content with response ID for continuation
-    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Response ID: {response.id}]")]
+    # Return content with context ID for continuation
+    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Context ID: {context_id}]")]
 
 
 async def query_claude(
@@ -297,16 +285,19 @@ async def query_claude(
     context_id: Optional[str] = None,
 ) -> list[TextContent]:
     """Query Claude using stateful conversations with context IDs."""
-    # Build system prompt with AI-to-AI context
-    system_prompt = build_system_prompt(system_prompt)
 
     # Retrieve and validate existing context
-    existing_context, context_id, error_msg = get_validated_context(context_id, "claude")
+    context, error_msg = get_validated_context(context_id, "claude")
     if error_msg:
         return [TextContent(type="text", text=error_msg)]
+    
+    if context and not system_prompt:
+        system_prompt = context['system_prompt']
+    else:
+        system_prompt = build_system_prompt(system_prompt)
 
     # Build messages for API call
-    messages = existing_context + [{"role": "user", "content": message}]
+    messages = (context['conversations'] if context else []) + [{"role": "user", "content": message}]
 
     kwargs = {
         "model": model,
@@ -328,7 +319,10 @@ async def query_claude(
     ]
 
     # Save or update context in store
-    context_id = save_or_update_context(context_id, new_messages, "claude")
+    if context is None:
+        context_id = conversation_store.create_context(new_messages, "claude", system_prompt)
+    else:
+        conversation_store.update_context(context_id, new_messages, system_prompt)
 
     usage_info = f"\n\n[Usage: {response.usage.input_tokens + response.usage.output_tokens} tokens ({response.usage.input_tokens} input, {response.usage.output_tokens} output)]"
 
@@ -345,17 +339,19 @@ async def query_gemini(
     context_id: Optional[str] = None,
 ) -> list[TextContent]:
     """Query Gemini using stateful conversations with context IDs."""
-    # Build system prompt with AI-to-AI context
-    system_prompt = build_system_prompt(system_prompt)
-
     # Retrieve and validate existing context
-    existing_context, context_id, error_msg = get_validated_context(context_id, "gemini")
+    context, error_msg = get_validated_context(context_id, "gemini")
     if error_msg:
         return [TextContent(type="text", text=error_msg)]
+    
+    if context and not system_prompt:
+        system_prompt = context['system_prompt']
+    else:
+        system_prompt = build_system_prompt(system_prompt)
 
     # Build contents for API call
     # Gemini Content format: {"role": "user", "parts": [{"text": "..."}]}
-    contents = existing_context + [{"role": "user", "parts": [{"text": message}]}]
+    contents = (context['conversations'] if context else []) + [{"role": "user", "parts": [{"text": message}]}]
 
     # Build GenerateContentConfig - only include params if explicitly provided
     config_params = {"system_instruction": system_prompt}
@@ -384,7 +380,10 @@ async def query_gemini(
     ]
 
     # Save or update context in store
-    context_id = save_or_update_context(context_id, new_messages, "gemini")
+    if context is None:
+        context_id = conversation_store.create_context(new_messages, "gemini", system_prompt)
+    else:
+        conversation_store.update_context(context_id, new_messages, system_prompt)
 
     # Format usage info
     usage_info = ""

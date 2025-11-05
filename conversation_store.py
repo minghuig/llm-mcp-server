@@ -17,12 +17,13 @@ class ConversationStore:
         self.max_conversations = max_conversations
         self.conversations = OrderedDict()
 
-    def save_context(self, context: list, provider: str) -> str:
-        """Save a new conversation context and return its ID.
+    def create_context(self, context: list, provider: str, system_prompt: str) -> str:
+        """Create a new conversation context and return its ID.
 
         Args:
             context: List of message objects representing the conversation
-            provider: Provider name (e.g., "claude", "gemini") to prefix the ID
+            provider: Provider name (e.g., "claude", "gemini", "chatgpt") to prefix the ID
+            system_prompt: System prompt to store with the conversation
 
         Returns:
             context_id: Unique identifier for this conversation with provider prefix
@@ -33,17 +34,20 @@ class ConversationStore:
         if len(self.conversations) >= self.max_conversations:
             self.conversations.popitem(last=False)  # Remove oldest (FIFO)
 
-        self.conversations[context_id] = context
+        self.conversations[context_id] = {
+            'system_prompt': system_prompt,
+            'conversations': context
+        }
         return context_id
 
-    def get_context(self, context_id: str) -> Optional[list]:
+    def get_context(self, context_id: str) -> Optional[dict]:
         """Retrieve conversation context by ID.
 
         Args:
             context_id: The conversation identifier
 
         Returns:
-            List of message objects, or None if not found
+            Dict with 'conversations' and 'system_prompt' keys, or None if not found
         """
         # Move to end (mark as recently used for LRU)
         if context_id in self.conversations:
@@ -51,25 +55,23 @@ class ConversationStore:
             return self.conversations[context_id]
         return None
 
-    def update_context(self, context_id: str, new_messages: list) -> bool:
+    def update_context(self, context_id: str, new_messages: list, system_prompt: str):
         """Append new messages to an existing conversation.
 
         Args:
             context_id: The conversation identifier
             new_messages: List of new message objects to append
-
-        Returns:
-            True if successful, False if context_id not found
+            system_prompt: System prompt to store
         """
-        if context_id not in self.conversations:
-            return False
 
         # Append new messages
-        self.conversations[context_id].extend(new_messages)
+        self.conversations[context_id]['conversations'].extend(new_messages)
+
+        # Update system prompt
+        self.conversations[context_id]['system_prompt'] = system_prompt
 
         # Move to end (mark as recently used)
         self.conversations.move_to_end(context_id)
-        return True
 
     def clear(self):
         """Clear all stored conversations."""
