@@ -38,35 +38,35 @@ def build_system_prompt(system_prompt: Optional[str] = None) -> str:
     return base_context
 
 
-def get_validated_context(
-    context_id: Optional[str], provider: str
+def get_validated_conversation(
+    conversation_id: Optional[str], provider: str
 ) -> tuple[Optional[dict], Optional[str]]:
-    """Retrieve and validate conversation context.
+    """Retrieve and validate conversation.
 
     Args:
-        context_id: Optional context ID to retrieve
+        conversation_id: Optional conversation ID to retrieve
         provider: Expected provider name (e.g., "claude", "gemini", "chatgpt")
 
     Returns:
-        Tuple of (context, error_message)
-        - context: Dict with 'conversations' and 'system_prompt' keys if exists, None otherwise
+        Tuple of (conversation, error_message)
+        - conversation: Dict with 'messages' and 'system_prompt' keys if exists, None otherwise
         - error_message: Error string if validation failed, None otherwise
     """
-    if not context_id:
+    if not conversation_id:
         return None, None
 
     # Validate provider prefix
-    expected_prefix = f"ctx_{provider}_"
-    if not context_id.startswith(expected_prefix):
+    expected_prefix = f"{provider}_"
+    if not conversation_id.startswith(expected_prefix):
         error_msg = (
-            f"Error: Invalid context_id for {provider.title()}. "
-            f"Expected context_id starting with '{expected_prefix}', got '{context_id}'. "
-            f"This context_id appears to be for a different provider."
+            f"Error: Invalid conversation_id for {provider.title()}. "
+            f"Expected conversation_id starting with '{expected_prefix}', got '{conversation_id}'. "
+            f"This conversation_id appears to be for a different provider."
         )
         return None, error_msg
 
-    # Try to retrieve context    
-    return conversation_store.get_context(context_id), None
+    # Try to retrieve conversation    
+    return conversation_store.get_conversation(conversation_id), None
 
 
 @app.list_tools()
@@ -75,7 +75,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="query_chatgpt",
-            description="Send a message to ChatGPT and get a response. Returns a Context ID that can be used to continue the conversation in follow-up calls.",
+            description="Send a message to ChatGPT and get a response. Returns a Conversation ID that can be used to continue the conversation in follow-up calls.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -100,9 +100,9 @@ async def list_tools() -> list[Tool]:
                         "type": "number",
                         "description": "Maximum tokens in response",
                     },
-                    "context_id": {
+                    "conversation_id": {
                         "type": "string",
-                        "description": "Optional ID from a previous response to continue that conversation. Use the Context ID returned in a previous call (found in the output after '[Context ID: ...]') to maintain conversation history.",
+                        "description": "Optional ID from a previous response to continue that conversation. Use the Conversation ID returned in a previous call (found in the output after '[Conversation ID: ...]') to maintain conversation history.",
                     },
                 },
                 "required": ["message"],
@@ -110,7 +110,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="query_claude",
-            description="Send a message to Claude and get a response. Returns a Context ID that can be used to continue the conversation in follow-up calls.",
+            description="Send a message to Claude and get a response. Returns a Conversation ID that can be used to continue the conversation in follow-up calls.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -136,9 +136,9 @@ async def list_tools() -> list[Tool]:
                         "description": "Maximum tokens in response (default: 4096)",
                         "default": 4096,
                     },
-                    "context_id": {
+                    "conversation_id": {
                         "type": "string",
-                        "description": "Optional ID from a previous response to continue that conversation. Use the Context ID returned in a previous call (found in the output after '[Context ID: ...]') to maintain conversation history.",
+                        "description": "Optional ID from a previous response to continue that conversation. Use the Conversation ID returned in a previous call (found in the output after '[Conversation ID: ...]') to maintain conversation history.",
                     },
                 },
                 "required": ["message"],
@@ -146,7 +146,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="query_gemini",
-            description="Send a message to Gemini and get a response. Returns a Context ID that can be used to continue the conversation in follow-up calls.",
+            description="Send a message to Gemini and get a response. Returns a Conversation ID that can be used to continue the conversation in follow-up calls.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -171,9 +171,9 @@ async def list_tools() -> list[Tool]:
                         "type": "number",
                         "description": "Maximum tokens in response (uses model default if not specified)",
                     },
-                    "context_id": {
+                    "conversation_id": {
                         "type": "string",
-                        "description": "Optional ID from a previous response to continue that conversation. Use the Context ID returned in a previous call (found in the output after '[Context ID: ...]') to maintain conversation history.",
+                        "description": "Optional ID from a previous response to continue that conversation. Use the Conversation ID returned in a previous call (found in the output after '[Conversation ID: ...]') to maintain conversation history.",
                     },
                 },
                 "required": ["message"],
@@ -192,7 +192,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             system_prompt=arguments.get("system_prompt"),
             temperature=arguments.get("temperature"),
             max_tokens=arguments.get("max_tokens"),
-            context_id=arguments.get("context_id"),
+            conversation_id=arguments.get("conversation_id"),
         )
     elif name == "query_claude":
         return await query_claude(
@@ -201,7 +201,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             system_prompt=arguments.get("system_prompt"),
             temperature=arguments.get("temperature"),
             max_tokens=arguments.get("max_tokens", 4096),
-            context_id=arguments.get("context_id"),
+            conversation_id=arguments.get("conversation_id"),
         )
     elif name == "query_gemini":
         return await query_gemini(
@@ -210,7 +210,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             system_prompt=arguments.get("system_prompt"),
             temperature=arguments.get("temperature"),
             max_tokens=arguments.get("max_tokens"),
-            context_id=arguments.get("context_id"),
+            conversation_id=arguments.get("conversation_id"),
         )
     else:
         raise ValueError(f"Unknown tool: {name}")
@@ -222,21 +222,21 @@ async def query_chatgpt(
     system_prompt: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
-    context_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
 ) -> list[TextContent]:
     """Query ChatGPT using Responses API for stateful conversations."""
 
-    # Retrieve and validate existing context
-    context, error_msg = get_validated_context(context_id, "chatgpt")
+    # Retrieve and validate existing conversation
+    conversation, error_msg = get_validated_conversation(conversation_id, "chatgpt")
     if error_msg:
         return [TextContent(type="text", text=error_msg)]
     
-    if context and not system_prompt:
-        system_prompt = context['system_prompt']
+    if conversation and not system_prompt:
+        system_prompt = conversation['system_prompt']
     else:
         system_prompt = build_system_prompt(system_prompt)
 
-    messages = (context['conversations'] if context else []) + [{"role": "user", "content": message}]
+    messages = (conversation['messages'] if conversation else []) + [{"role": "user", "content": message}]
 
     # Build kwargs for responses.create()
     kwargs = {
@@ -263,17 +263,17 @@ async def query_chatgpt(
         {"role": "assistant", "content": content}
     ]
 
-    # Save or update context in store
-    if context is None:
-        context_id = conversation_store.create_context(new_messages, "chatgpt", system_prompt)
+    # Save or update conversation in store
+    if conversation is None:
+        conversation_id = conversation_store.create_conversation(new_messages, "chatgpt", system_prompt)
     else:
-        conversation_store.update_context(context_id, new_messages, system_prompt)
+        conversation_store.update_conversation(conversation_id, new_messages, system_prompt)
 
     # Format usage info
     usage_info = f"\n\n[Usage: {response.usage.total_tokens} tokens ({response.usage.input_tokens} input, {response.usage.output_tokens} output)]"
 
-    # Return content with context ID for continuation
-    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Context ID: {context_id}]")]
+    # Return content with conversation ID for continuation
+    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Conversation ID: {conversation_id}]")]
 
 
 async def query_claude(
@@ -282,22 +282,22 @@ async def query_claude(
     system_prompt: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: int = 4096,
-    context_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
 ) -> list[TextContent]:
-    """Query Claude using stateful conversations with context IDs."""
+    """Query Claude using stateful conversations with conversation IDs."""
 
-    # Retrieve and validate existing context
-    context, error_msg = get_validated_context(context_id, "claude")
+    # Retrieve and validate existing conversation
+    conversation, error_msg = get_validated_conversation(conversation_id, "claude")
     if error_msg:
         return [TextContent(type="text", text=error_msg)]
     
-    if context and not system_prompt:
-        system_prompt = context['system_prompt']
+    if conversation and not system_prompt:
+        system_prompt = conversation['system_prompt']
     else:
         system_prompt = build_system_prompt(system_prompt)
 
     # Build messages for API call
-    messages = (context['conversations'] if context else []) + [{"role": "user", "content": message}]
+    messages = (conversation['messages'] if conversation else []) + [{"role": "user", "content": message}]
 
     kwargs = {
         "model": model,
@@ -318,16 +318,16 @@ async def query_claude(
         {"role": "assistant", "content": content}
     ]
 
-    # Save or update context in store
-    if context is None:
-        context_id = conversation_store.create_context(new_messages, "claude", system_prompt)
+    # Save or update conversation in store
+    if conversation is None:
+        conversation_id = conversation_store.create_conversation(new_messages, "claude", system_prompt)
     else:
-        conversation_store.update_context(context_id, new_messages, system_prompt)
+        conversation_store.update_conversation(conversation_id, new_messages, system_prompt)
 
     usage_info = f"\n\n[Usage: {response.usage.input_tokens + response.usage.output_tokens} tokens ({response.usage.input_tokens} input, {response.usage.output_tokens} output)]"
 
-    # Return content with context ID
-    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Context ID: {context_id}]")]
+    # Return content with conversation ID
+    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Conversation ID: {conversation_id}]")]
 
 
 async def query_gemini(
@@ -336,22 +336,22 @@ async def query_gemini(
     system_prompt: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
-    context_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
 ) -> list[TextContent]:
-    """Query Gemini using stateful conversations with context IDs."""
-    # Retrieve and validate existing context
-    context, error_msg = get_validated_context(context_id, "gemini")
+    """Query Gemini using stateful conversations with conversation IDs."""
+    # Retrieve and validate existing conversation
+    conversation, error_msg = get_validated_conversation(conversation_id, "gemini")
     if error_msg:
         return [TextContent(type="text", text=error_msg)]
     
-    if context and not system_prompt:
-        system_prompt = context['system_prompt']
+    if conversation and not system_prompt:
+        system_prompt = conversation['system_prompt']
     else:
         system_prompt = build_system_prompt(system_prompt)
 
     # Build contents for API call
     # Gemini Content format: {"role": "user", "parts": [{"text": "..."}]}
-    contents = (context['conversations'] if context else []) + [{"role": "user", "parts": [{"text": message}]}]
+    contents = (conversation['messages'] if conversation else []) + [{"role": "user", "parts": [{"text": message}]}]
 
     # Build GenerateContentConfig - only include params if explicitly provided
     config_params = {"system_instruction": system_prompt}
@@ -379,11 +379,11 @@ async def query_gemini(
         {"role": "model", "parts": [{"text": content}]}
     ]
 
-    # Save or update context in store
-    if context is None:
-        context_id = conversation_store.create_context(new_messages, "gemini", system_prompt)
+    # Save or update conversation in store
+    if conversation is None:
+        conversation_id = conversation_store.create_conversation(new_messages, "gemini", system_prompt)
     else:
-        conversation_store.update_context(context_id, new_messages, system_prompt)
+        conversation_store.update_conversation(conversation_id, new_messages, system_prompt)
 
     # Format usage info
     usage_info = ""
@@ -393,8 +393,8 @@ async def query_gemini(
         completion = response.usage_metadata.candidates_token_count
         usage_info = f"\n\n[Usage: {total} tokens ({prompt} input, {completion} output)]"
 
-    # Return content with context ID
-    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Context ID: {context_id}]")]
+    # Return content with conversation ID
+    return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Conversation ID: {conversation_id}]")]
 
 
 async def main():
