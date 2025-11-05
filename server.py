@@ -7,6 +7,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from mcp.server import Server
+from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 from openai import AsyncOpenAI
 from anthropic import AsyncAnthropic
@@ -26,12 +27,16 @@ google_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 # Initialize conversation store
 conversation_store = ConversationStore(max_conversations=50)
 
+# Get conversations export directory (expand ~ if present)
+conversations_dir = os.path.expanduser(os.getenv("LLM_CONVERSATIONS_DIR", "~/Documents/llm_conversations"))
+
 # Create MCP server
 app = Server("llm-mcp-server")
 
 
 def build_system_prompt(system_prompt: Optional[str] = None) -> str:
     """Build system prompt with AI-to-AI context."""
+
     base_context = "You are conversing with another AI assistant through an MCP server."
     if system_prompt:
         return f"{base_context}\n\n{system_prompt}"
@@ -41,17 +46,8 @@ def build_system_prompt(system_prompt: Optional[str] = None) -> str:
 def get_validated_conversation(
     conversation_id: Optional[str], provider: str
 ) -> tuple[Optional[dict], Optional[str]]:
-    """Retrieve and validate conversation.
+    """Retrieve and validate conversation."""
 
-    Args:
-        conversation_id: Optional conversation ID to retrieve
-        provider: Expected provider name (e.g., "claude", "gemini", "chatgpt")
-
-    Returns:
-        Tuple of (conversation, error_message)
-        - conversation: Dict with 'messages' and 'system_prompt' keys if exists, None otherwise
-        - error_message: Error string if validation failed, None otherwise
-    """
     if not conversation_id:
         return None, None
 
@@ -72,6 +68,7 @@ def get_validated_conversation(
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     """List available tools."""
+
     return [
         Tool(
             name="query_chatgpt",
@@ -179,12 +176,31 @@ async def list_tools() -> list[Tool]:
                 "required": ["message"],
             },
         ),
+        Tool(
+            name="export_conversation",
+            description="Export a conversation to a markdown file. The conversation will be saved to the directory specified by LLM_CONVERSATIONS_DIR environment variable.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "conversation_id": {
+                        "type": "string",
+                        "description": "The conversation ID to export (e.g., 'chatgpt_abc123def456')",
+                    },
+                    "calling_llm_name": {
+                        "type": "string",
+                        "description": "The name of the LLM making the calls (e.g., 'Claude', 'ChatGPT', 'Gemini')",
+                    },
+                },
+                "required": ["conversation_id", "calling_llm_name"],
+            },
+        ),
     ]
 
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls."""
+
     if name == "query_chatgpt":
         return await query_chatgpt(
             message=arguments["message"],
@@ -211,6 +227,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             temperature=arguments.get("temperature"),
             max_tokens=arguments.get("max_tokens"),
             conversation_id=arguments.get("conversation_id"),
+        )
+    elif name == "export_conversation":
+        return export_conversation(
+            conversation_id=arguments["conversation_id"],
+            calling_llm_name=arguments["calling_llm_name"],
         )
     else:
         raise ValueError(f"Unknown tool: {name}")
@@ -339,6 +360,7 @@ async def query_gemini(
     conversation_id: Optional[str] = None,
 ) -> list[TextContent]:
     """Query Gemini using stateful conversations with conversation IDs."""
+
     # Retrieve and validate existing conversation
     conversation, error_msg = get_validated_conversation(conversation_id, "gemini")
     if error_msg:
@@ -397,10 +419,70 @@ async def query_gemini(
     return [TextContent(type="text", text=f"{content}{usage_info}\n\n[Conversation ID: {conversation_id}]")]
 
 
+def export_conversation(conversation_id: str, calling_llm_name: str) -> list[TextContent]:
+    """Export a conversation to a markdown file."""
+
+    # Get the conversation
+    conversation = conversation_store.get_conversation(conversation_id)
+    if conversation is None:
+        return [TextContent(type="text", text=f"Error: Conversation '{conversation_id}' not found.")]
+
+    # Extract provider from conversation_id (e.g., "chatgpt" from "chatgpt_abc123")
+    provider = conversation_id.split("_")[0]
+
+    # Map provider names to display names
+    provider_display_names = {
+        "chatgpt": "ChatGPT",
+        "claude": "Claude",
+        "gemini": "Gemini"
+    }
+    responding_llm_name = provider_display_names.get(provider, provider.title())
+
+    # Build markdown content
+    lines = [f"# Conversation: {conversation_id}\n"]
+
+    messages = conversation['messages']
+    for msg in messages:
+        # Extract content based on message format
+        if 'role' in msg:
+            role = msg['role']
+            if 'content' in msg:
+                # ChatGPT/Claude format
+                content = msg['content']
+            elif 'parts' in msg:
+                # Gemini format
+                content = msg['parts'][0]['text']
+            else:
+                content = str(msg)
+
+            # Determine which LLM sent this message
+            if role == "user":
+                llm_name = calling_llm_name
+            elif role in ["assistant", "model"]:
+                llm_name = responding_llm_name
+            else:
+                llm_name = role.title()
+
+            lines.append(f"**{llm_name}:** {content}\n")
+
+    markdown_content = "\n".join(lines)
+
+    # Create directory if it doesn't exist
+    os.makedirs(conversations_dir, exist_ok=True)
+
+    # Write to file
+    file_path = os.path.join(conversations_dir, f"{conversation_id}.md")
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(markdown_content)
+        return [TextContent(type="text", text=f"Conversation exported successfully to: {file_path}")]
+    except Exception as e:
+        return [TextContent(type="text", text=f"Error writing file: {str(e)}")]
+
+
 async def main():
     """Run the MCP server."""
-    from mcp.server.stdio import stdio_server
-
+    
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())
 

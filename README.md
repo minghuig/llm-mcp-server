@@ -7,7 +7,9 @@ A simple MCP (Model Context Protocol) server that provides tools to query Claude
 - `query_claude`: Send messages to Claude (Anthropic API) with multi-turn conversation support
 - `query_chatgpt`: Send messages to ChatGPT (OpenAI API) with multi-turn conversation support
 - `query_gemini`: Send messages to Gemini (Google API) with multi-turn conversation support
+- `export_conversation`: Export conversations to markdown files
 - AI-to-AI conversation context automatically included in system prompts
+- System prompt persistence across conversations
 
 ## Setup
 
@@ -123,3 +125,13 @@ When you provide a `system_prompt` in the first message of a conversation, it wi
 Example workflow:
 1. First call: `query_gemini("Hello!")` → Returns `[Conversation ID: gemini_abc123def456]`
 2. Follow-up: `query_gemini("How are you?", conversation_id="gemini_abc123def456")`
+
+### export_conversation
+Export a conversation to a markdown file. The conversation will be saved to the directory specified by the `LLM_CONVERSATIONS_DIR` environment variable.
+
+Parameters:
+- `conversation_id` (required): The conversation ID to export (e.g., "chatgpt_abc123def456")
+- `calling_llm_name` (required): The name of the LLM making the calls (e.g., "Claude", "ChatGPT", "Gemini")
+
+**Output format:**
+The exported file will be a markdown file with the conversation ID as the filename (e.g., `chatgpt_abc123def456.md`). The conversation is formatted with alternating messages labeled by the participant names.
