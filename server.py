@@ -19,10 +19,10 @@ from conversation_store import ConversationStore
 # Load environment variables
 load_dotenv()
 
-# Initialize API clients
-openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-google_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+# Initialize API clients (only if API keys are present)
+openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY")) if os.getenv("OPENAI_API_KEY") else None
+anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY")) if os.getenv("ANTHROPIC_API_KEY") else None
+google_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY")) if os.getenv("GOOGLE_API_KEY") else None
 
 # Initialize conversation store
 conversation_store = ConversationStore(max_conversations=50)
@@ -247,6 +247,10 @@ async def query_chatgpt(
 ) -> list[TextContent]:
     """Query ChatGPT using Responses API for stateful conversations."""
 
+    # Check if ChatGPT is configured
+    if openai_client is None:
+        return [TextContent(type="text", text="Error: ChatGPT is not configured. Please add OPENAI_API_KEY to your .env file.")]
+
     # Retrieve and validate existing conversation
     conversation, error_msg = get_validated_conversation(conversation_id, "chatgpt")
     if error_msg:
@@ -307,6 +311,10 @@ async def query_claude(
 ) -> list[TextContent]:
     """Query Claude using stateful conversations with conversation IDs."""
 
+    # Check if Claude is configured
+    if anthropic_client is None:
+        return [TextContent(type="text", text="Error: Claude is not configured. Please add ANTHROPIC_API_KEY to your .env file.")]
+
     # Retrieve and validate existing conversation
     conversation, error_msg = get_validated_conversation(conversation_id, "claude")
     if error_msg:
@@ -360,6 +368,10 @@ async def query_gemini(
     conversation_id: Optional[str] = None,
 ) -> list[TextContent]:
     """Query Gemini using stateful conversations with conversation IDs."""
+
+    # Check if Gemini is configured
+    if google_client is None:
+        return [TextContent(type="text", text="Error: Gemini is not configured. Please add GOOGLE_API_KEY to your .env file.")]
 
     # Retrieve and validate existing conversation
     conversation, error_msg = get_validated_conversation(conversation_id, "gemini")
