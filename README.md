@@ -16,7 +16,7 @@ A simple MCP (Model Context Protocol) server that provides tools to query Claude
 1. Create a virtual environment:
 ```bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 ```
 
 2. Install dependencies:
@@ -62,7 +62,7 @@ Send a message to ChatGPT (OpenAI). Supports multi-turn conversations using serv
 
 Parameters:
 - `message` (required): The message to send
-- `model` (optional): Model to use (default: "gpt-4.1-2025-04-14")
+- `model` (optional): Model to use (default: "gpt-5.1-2025-11-13")
 - `system_prompt` (optional): System prompt for context (persists throughout conversation unless overridden)
 - `temperature` (optional): 0.0 to 2.0 (uses model default if not specified)
 - `max_tokens` (optional): Maximum response length

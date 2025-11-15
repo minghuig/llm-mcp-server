@@ -82,8 +82,8 @@ async def list_tools() -> list[Tool]:
                     },
                     "model": {
                         "type": "string",
-                        "description": "Model to use (default: gpt-4.1-2025-04-14)",
-                        "default": "gpt-4.1-2025-04-14",
+                        "description": "Model to use (default: gpt-5.1-2025-11-13)",
+                        "default": "gpt-5.1-2025-11-13",
                     },
                     "system_prompt": {
                         "type": "string",
@@ -204,7 +204,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "query_chatgpt":
         return await query_chatgpt(
             message=arguments["message"],
-            model=arguments.get("model", "gpt-4.1-2025-04-14"),
+            model=arguments.get("model", "gpt-5.1-2025-11-13"),
             system_prompt=arguments.get("system_prompt"),
             temperature=arguments.get("temperature"),
             max_tokens=arguments.get("max_tokens"),
